@@ -59,7 +59,7 @@ namespace AzureDnsExternalIpSync.Cli.Services
         private static async Task<IPAddress> GetPublicIPv4AddressAsync(CancellationToken cancellationToken)
         {
             var urlContent =
-                await GetUrlContentAsStringAsync("http://ipv4.icanhazip.com/", cancellationToken);
+                await GetUrlContentAsStringAsync("https://ipv4.icanhazip.com/", cancellationToken);
 
             return ParseSingleIPv4Address(urlContent);
         }
