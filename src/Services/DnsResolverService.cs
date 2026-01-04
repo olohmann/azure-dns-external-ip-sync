@@ -1,16 +1,13 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Net;
-using System.Net.Http;
+using Azure;
+using Azure.Identity;
+using Azure.ResourceManager;
+using Azure.ResourceManager.Dns;
+using Azure.ResourceManager.Dns.Models;
 using AzureDnsExternalIpSync.Cli.Options;
-using Microsoft.Azure.Management.Dns;
-using Microsoft.Azure.Management.Dns.Models;
+using AzureDnsExternalIpSync.Cli.Services.Abstractions;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Clients.ActiveDirectory;
-using Microsoft.Rest.Azure.Authentication;
 using Serilog;
 
 namespace AzureDnsExternalIpSync.Cli.Services
@@ -18,88 +15,50 @@ namespace AzureDnsExternalIpSync.Cli.Services
     public class DnsResolverService
     {
         private readonly IOptions<DnsResolverServiceOptions> _options;
+        private readonly IPublicIpAddressProvider _ipProvider;
 
-        public DnsResolverService(IOptions<DnsResolverServiceOptions> options)
+        public DnsResolverService(IOptions<DnsResolverServiceOptions> options, IPublicIpAddressProvider ipProvider)
         {
             _options = options;
-        }
-
-        private static IPAddress ParseSingleIPv4Address(string input)
-        {
-            if (string.IsNullOrEmpty(input))
-            {
-                throw new ArgumentException("Input string must not be null", input);
-            }
-
-            var addressBytesSplit = input.Trim().Split('.').ToList();
-            if (addressBytesSplit.Count != 4)
-            {
-                throw new ArgumentException("Input string was not in valid IPV4 format \"a.b.c.d\"", input);
-            }
-
-            var addressBytes = new byte[4];
-            foreach (var i in Enumerable.Range(0, addressBytesSplit.Count))
-            {
-                if (!int.TryParse(addressBytesSplit[i], out var parsedInt))
-                {
-                    throw new FormatException($"Unable to parse integer from {addressBytesSplit[i]}");
-                }
-
-                if (0 > parsedInt || parsedInt > 255)
-                {
-                    throw new ArgumentOutOfRangeException($"{parsedInt} not within required IP address range [0,255]");
-                }
-
-                addressBytes[i] = (byte)parsedInt;
-            }
-
-            return new IPAddress(addressBytes);
-        }
-
-        private static async Task<IPAddress> GetPublicIPv4AddressAsync(CancellationToken cancellationToken)
-        {
-            var urlContent =
-                await GetUrlContentAsStringAsync("https://ipv4.icanhazip.com/", cancellationToken);
-
-            return ParseSingleIPv4Address(urlContent);
-        }
-
-        private static async Task<string> GetUrlContentAsStringAsync(string url, CancellationToken cancellationToken)
-        {
-            using var httpClient = new HttpClient();
-            using var httpResponse = await httpClient.GetAsync(url, cancellationToken);
-
-            var urlContent =
-                await httpResponse.Content.ReadAsStringAsync(cancellationToken);
-
-            return urlContent;
+            _ipProvider = ipProvider;
         }
 
         public async Task Run(CancellationToken cancellationToken)
         {
             Log.Information("Update frequency set to {@UpdateFrequency} min.", _options.Value.UpdateFrequencyInMinutes);
             
-            var credentials = await ApplicationTokenProvider.LoginSilentAsync(_options.Value.TenantId, _options.Value.ClientId, _options.Value.ClientSecret);
-            var dnsClient = new DnsManagementClient(credentials);
-            dnsClient.SubscriptionId = _options.Value.SubscriptionId;
+            var credential = new ClientSecretCredential(_options.Value.TenantId, _options.Value.ClientId, _options.Value.ClientSecret);
+            var armClient = new ArmClient(credential);
+            var dnsZoneResourceId = DnsZoneResource.CreateResourceIdentifier(_options.Value.SubscriptionId, _options.Value.ResourceGroupName, _options.Value.AzureDnsZoneName);
+            var dnsZone = armClient.GetDnsZoneResource(dnsZoneResourceId);
             
             while (!cancellationToken.IsCancellationRequested)
             {
-                var externalIpAddress = await GetPublicIPv4AddressAsync(cancellationToken);
-                var recordSet = new RecordSet(aRecords: new List<ARecord>(new[]
-                    { new ARecord(ipv4Address: externalIpAddress.ToString()) }));
-                
-                Log.Information("Current External IP Address: {@ipaddress}", externalIpAddress.ToString());
-                Log.Information("Updating Azure DNS entry...");
-                Log.Information("Successfully updated Azure DNS entry.");
+                var externalIpAddress = await _ipProvider.GetPublicIpAddressAsync(cancellationToken);
+                var aRecordCollection = dnsZone.GetDnsARecords();
+                DnsARecordData recordData = new DnsARecordData();
+                recordData.TtlInSeconds = 3600;
 
-                await dnsClient.RecordSets.UpdateAsync(
-                    _options.Value.ResourceGroupName,
-                    _options.Value.AzureDnsZoneName,
-                    _options.Value.AzureDnsRecordSetName,
-                    RecordType.A,
-                    recordSet,
-                    cancellationToken: cancellationToken);
+                try 
+                {
+                    var existingRecord = await aRecordCollection.GetAsync(_options.Value.AzureDnsRecordSetName, cancellationToken: cancellationToken);
+                    if (existingRecord.HasValue)
+                    {
+                        recordData = existingRecord.Value.Data;
+                        recordData.DnsARecords.Clear();
+                    }
+                }
+                catch (RequestFailedException ex) when (ex.Status == 404)
+                {
+                    // Record doesn't exist, use default
+                }
+
+                recordData.DnsARecords.Add(new DnsARecordInfo { IPv4Address = externalIpAddress });
+
+                await aRecordCollection.CreateOrUpdateAsync(WaitUntil.Completed, _options.Value.AzureDnsRecordSetName, recordData, cancellationToken: cancellationToken);
+
+                var dnsEntry = $"{_options.Value.AzureDnsRecordSetName}.{_options.Value.Host}";
+                Log.Information("Successfully updated Azure DNS {@dnsEntry} to {@ipaddress}.", dnsEntry, externalIpAddress.ToString());
                 
                 for (int i = _options.Value.UpdateFrequencyInMinutes; i > 0; i--)
                 {
