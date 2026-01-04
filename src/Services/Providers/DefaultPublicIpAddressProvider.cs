@@ -10,6 +10,13 @@ namespace AzureDnsExternalIpSync.Cli.Services.Providers
 {
     public class DefaultPublicIpAddressProvider : IPublicIpAddressProvider
     {
+        private readonly IHttpClientFactory _httpClientFactory;
+
+        public DefaultPublicIpAddressProvider(IHttpClientFactory httpClientFactory)
+        {
+            _httpClientFactory = httpClientFactory;
+        }
+
         public async Task<IPAddress> GetPublicIpAddressAsync(CancellationToken cancellationToken)
         {
             var urlContent = await GetUrlContentAsStringAsync("https://ipv4.icanhazip.com/", cancellationToken);
@@ -48,9 +55,9 @@ namespace AzureDnsExternalIpSync.Cli.Services.Providers
             return new IPAddress(addressBytes);
         }
 
-        private static async Task<string> GetUrlContentAsStringAsync(string url, CancellationToken cancellationToken)
+        private async Task<string> GetUrlContentAsStringAsync(string url, CancellationToken cancellationToken)
         {
-            using var httpClient = new HttpClient();
+            using var httpClient = _httpClientFactory.CreateClient();
             using var httpResponse = await httpClient.GetAsync(url, cancellationToken);
 
             var urlContent =

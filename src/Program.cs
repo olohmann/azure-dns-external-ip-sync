@@ -127,7 +127,7 @@ namespace AzureDnsExternalIpSync.Cli
                 Log.Information("Starting Prometheus Listener on port {@Port}...", prometheusOptions.Value.Port);
 
                 // Prometheus Scrap API.
-                var server = new MetricServer("localhost", prometheusOptions.Value.Port);
+                var server = new MetricServer("*", prometheusOptions.Value.Port);
                 server.Start();
                 Log.Information("Prometheus Listener started successfully.");
 

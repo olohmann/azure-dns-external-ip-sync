@@ -13,6 +13,7 @@ namespace AzureDnsExternalIpSync.Cli
         public static IServiceProvider Configure(IConfiguration configuration)
         {
             var serviceCollection = new ServiceCollection();
+            serviceCollection.AddHttpClient();
             serviceCollection.AddOptions();
             serviceCollection.Configure<DnsResolverServiceOptions>(
                 configuration.GetSection(DnsResolverServiceOptions.SectionName));

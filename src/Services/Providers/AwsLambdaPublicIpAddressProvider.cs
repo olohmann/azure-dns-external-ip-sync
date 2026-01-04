@@ -18,10 +18,12 @@ namespace AzureDnsExternalIpSync.Cli.Services.Providers
     public class AwsLambdaPublicIpAddressProvider : IPublicIpAddressProvider
     {
         private readonly AwsLambdaOptions _options;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public AwsLambdaPublicIpAddressProvider(IOptions<AwsLambdaOptions> options)
+        public AwsLambdaPublicIpAddressProvider(IOptions<AwsLambdaOptions> options, IHttpClientFactory httpClientFactory)
         {
             _options = options.Value;
+            _httpClientFactory = httpClientFactory;
         }
 
         public async Task<IPAddress> GetPublicIpAddressAsync(CancellationToken cancellationToken)
@@ -72,7 +74,7 @@ namespace AzureDnsExternalIpSync.Cli.Services.Providers
             var config = new LambdaClientConfig(_options.Region);
             new AWS4Signer().Sign(request, config, null, immutableCredentials.AccessKey, immutableCredentials.SecretKey);
 
-            using var httpClient = new HttpClient();
+            using var httpClient = _httpClientFactory.CreateClient();
             using var httpRequest = new HttpRequestMessage(HttpMethod.Get, _options.FunctionUrl);
 
             foreach (var header in request.Headers)
